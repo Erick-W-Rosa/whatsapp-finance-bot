@@ -442,23 +442,34 @@ async function handleFinanceQuery(linkedUser, data) {
 
   const totalIncomeMonth = incomesMonth.reduce((sum, item) => sum + getAmount(item), 0);
   const totalExpenseMonth = expensesMonth.reduce((sum, item) => sum + getAmount(item), 0);
-  const totalDebt = debts.reduce((sum, item) => sum + getAmount(item), 0);
+  const debtsMonth = debts.filter((item) => isCurrentMonth(getDateValue(item)));
+
+  const totalDebtMonth = debtsMonth.reduce((sum, item) => sum + getAmount(item), 0);
+  const totalDebtOpen = debts.reduce((sum, item) => sum + getAmount(item), 0);
   const totalInvested = investments.reduce((sum, item) => sum + getAmount(item), 0);
   const totalSubscriptions = subscriptions.reduce((sum, item) => sum + getAmount(item), 0);
 
-  const balance = totalIncomeMonth - totalExpenseMonth;
+  const totalCommittedMonth =
+    totalExpenseMonth + totalSubscriptions + totalDebtMonth;
+
+  const balance = totalIncomeMonth - totalCommittedMonth;
+  
 
   if (data.query_type === "balance") {
     return `📊 Seu saldo estimado deste mês:
 
 Receitas: ${formatMoney(totalIncomeMonth)}
-Despesas: ${formatMoney(totalExpenseMonth)}
+
+Despesas lançadas: ${formatMoney(totalExpenseMonth)}
 Assinaturas: ${formatMoney(totalSubscriptions)}
+Dívidas/parcelas do mês: ${formatMoney(totalDebtMonth)}
+
+Total comprometido: ${formatMoney(totalCommittedMonth)}
 
 Saldo disponível: ${formatMoney(balance)}
 
 Investido: ${formatMoney(totalInvested)}
-Dívidas em aberto: ${formatMoney(totalDebt)}`;
+Dívidas em aberto: ${formatMoney(totalDebtOpen)}`;
   }
 
   if (data.query_type === "expenses_month") {
