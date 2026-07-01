@@ -454,18 +454,25 @@ async function handleFinanceQuery(linkedUser, data) {
   const now = new Date();
 
 const totalDebtMonth = activeDebts.reduce((sum, item) => {
+  const currentInstallment = Number(item.current_installment || 0);
+  const totalInstallments = Number(item.installments_count || 0);
 
-    const dueDay = Number(item.due_day || 1);
+  if (totalInstallments > 0 && currentInstallment >= totalInstallments) {
+    return sum;
+  }
 
-    const currentInstallment = Number(item.current_installment || 1);
+  const installmentAmount = Number(item.installment_amount || 0);
 
-    const totalInstallments = Number(item.installments_count || 0);
+  console.log("DÍVIDA CALCULADA:", {
+    name: item.name,
+    total_amount: item.total_amount,
+    installments_count: item.installments_count,
+    current_installment: item.current_installment,
+    installment_amount: item.installment_amount,
+    usado_no_mes: installmentAmount
+  });
 
-    if (currentInstallment > totalInstallments)
-        return sum;
-
-    return sum + Number(item.installment_amount || 0);
-
+  return sum + installmentAmount;
 }, 0);
   const totalDebtOpen = debts.reduce(
     (sum, item) => sum + Number(item.total_amount || 0),
