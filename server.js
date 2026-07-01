@@ -451,10 +451,22 @@ async function handleFinanceQuery(linkedUser, data) {
     const status = String(item.status || "").toLowerCase();
     return item.active === true || status === "active" || status === "ativa" || status === "";
   });
-  const totalDebtMonth = activeDebts.reduce(
-    (sum, item) => sum + getDebtMonthlyAmount(item),
-    0
-  );
+  const now = new Date();
+
+const totalDebtMonth = activeDebts.reduce((sum, item) => {
+
+    const dueDay = Number(item.due_day || 1);
+
+    const currentInstallment = Number(item.current_installment || 1);
+
+    const totalInstallments = Number(item.installments_count || 0);
+
+    if (currentInstallment > totalInstallments)
+        return sum;
+
+    return sum + Number(item.installment_amount || 0);
+
+}, 0);
   const totalDebtOpen = debts.reduce(
     (sum, item) => sum + Number(item.total_amount || 0),
     0
