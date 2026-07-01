@@ -364,26 +364,16 @@ function formatMoney(value) {
 }
 
 function getDebtMonthlyAmount(item) {
-  return Number(
-    item.installment_amount ||
-    item.monthly_installment ||
-    item.monthly_payment ||
-    item.payment_amount ||
-    item.valor_parcela ||
-    item.parcel_amount ||
-    item.installment_value ||
-    0
-  );
+  return Number(item.installment_amount || 0);
 }
 
 function getAmount(item) {
   return Number(
-    item.amount ||
-    item.value ||
-    item.valor ||
-    item.current_value ||
-    item.remaining_amount ||
-    item.original_amount ||
+    item.amount ??
+    item.value ??
+    item.valor ??
+    item.current_value ??
+    item.total_amount ??
     0
   );
 }
@@ -465,7 +455,10 @@ async function handleFinanceQuery(linkedUser, data) {
     (sum, item) => sum + getDebtMonthlyAmount(item),
     0
   );
-  const totalDebtOpen = debts.reduce((sum, item) => sum + getAmount(item), 0);
+  const totalDebtOpen = debts.reduce(
+    (sum, item) => sum + Number(item.total_amount || 0),
+    0
+  );
   const totalInvested = investments.reduce((sum, item) => sum + getAmount(item), 0);
   const totalSubscriptions = subscriptions.reduce((sum, item) => sum + getAmount(item), 0);
 
@@ -522,7 +515,7 @@ ${incomesMonth
   if (data.query_type === "debts") {
     return `📌 Suas dívidas:
 
-Total em aberto: ${formatMoney(totalDebt)}
+Total em aberto: ${formatMoney(totalDebtOpen)}
 Quantidade: ${debts.length}
 
 ${debts
