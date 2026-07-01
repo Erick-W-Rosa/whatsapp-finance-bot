@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
+const OpenAI = require("openai");
 
 const app = express();
 app.use(express.json());
@@ -8,17 +9,18 @@ app.use(express.json());
 const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
 const ACCESS_TOKEN = process.env.META_ACCESS_TOKEN;
 const PHONE_NUMBER_ID = process.env.META_PHONE_NUMBER_ID;
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+const pendingActions = {};
 
 async function sendWhatsAppMessage(to, body) {
-  const response = await axios.post(
+  await axios.post(
     `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`,
     {
       messaging_product: "whatsapp",
       to,
       type: "text",
-      text: {
-        body
-      }
+      text: { body }
     },
     {
       headers: {
@@ -27,35 +29,67 @@ async function sendWhatsAppMessage(to, body) {
       }
     }
   );
-
-  console.log("Resposta da Meta:");
-  console.log(JSON.stringify(response.data, null, 2));
-
-  return response.data;
 }
 
-function getInitialReply(text) {
-  return `Olá! Sou seu Assistente Financeiro IA 👋
-
-Recebi sua mensagem:
+async function interpretFinancialMessage(text) {
+  const response = await openai.responses.create({
+    model: "gpt-4.1-mini",
+    input: `Interprete esta mensagem financeira em JSON:
 "${text}"
 
-Por enquanto estou em fase de teste, mas em breve vou conseguir:
+Retorne SOMENTE JSON válido com:
+{
+  "action": "create_transaction | query | unknown",
+  "type": "expense | income | debt | investment | transfer | null",
+  "description": "string",
+  "category": "string",
+  "amount": number,
+  "date": "today | yesterday | tomorrow | null",
+  "status": "paid | pending | received | null",
+  "installments": number | null,
+  "confidence": number
+}`
+  });
 
-• Lançar despesas
-• Lançar receitas
-• Consultar saldo
-• Avisar contas vencendo
-• Ler comprovantes
-• Gerar prévia antes de salvar
+  const content = response.output_text;
+  return JSON.parse(content);
+}
 
-Teste enviando algo como:
+function formatPreview(data) {
+  if (data.action === "unknown" || !data.amount) {
+    return `Não consegui entender totalmente.
 
+Tente assim:
 "Gastei 35 reais com lanche hoje"
-
 ou
-
 "Recebi 1500 de salário"`;
+  }
+
+  const tipo =
+    data.type === "expense" ? "Despesa" :
+    data.type === "income" ? "Receita" :
+    data.type === "debt" ? "Dívida" :
+    data.type === "investment" ? "Investimento" :
+    data.type === "transfer" ? "Transferência" :
+    "Lançamento";
+
+  const valor = Number(data.amount).toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL"
+  });
+
+  return `Encontrei:
+
+Tipo: ${tipo}
+Descrição: ${data.description || "-"}
+Categoria: ${data.category || "-"}
+Valor: ${valor}
+Data: ${data.date || "hoje"}
+Status: ${data.status || "-"}
+
+Confirmar?
+1 - Sim
+2 - Cancelar`;
 }
 
 app.get("/webhook/whatsapp", (req, res) => {
@@ -64,58 +98,59 @@ app.get("/webhook/whatsapp", (req, res) => {
   const challenge = req.query["hub.challenge"];
 
   if (mode === "subscribe" && token === VERIFY_TOKEN) {
-    console.log("Webhook verificado com sucesso.");
     return res.status(200).send(challenge);
   }
 
-  console.log("Falha na verificação do webhook.");
   return res.sendStatus(403);
 });
 
 app.post("/webhook/whatsapp", async (req, res) => {
-  console.log("==================================");
-  console.log("WEBHOOK RECEBIDO");
-  console.log(JSON.stringify(req.body, null, 2));
-  console.log("==================================");
-
   try {
     const value = req.body?.entry?.[0]?.changes?.[0]?.value;
     const message = value?.messages?.[0];
 
-    if (!message) {
-      console.log("Nenhuma mensagem no payload.");
-      return res.sendStatus(200);
-    }
-
-    console.log("Mensagem recebida:");
-    console.log(JSON.stringify(message, null, 2));
+    if (!message) return res.sendStatus(200);
 
     const from = message.from;
 
     if (message.type !== "text") {
+      await sendWhatsAppMessage(from, "Por enquanto estou entendendo apenas mensagens de texto.");
+      return res.sendStatus(200);
+    }
+
+    const text = (message.text?.body || "").trim();
+
+    if (text === "1" && pendingActions[from]) {
+      const action = pendingActions[from];
+      delete pendingActions[from];
+
       await sendWhatsAppMessage(
         from,
-        `Recebi uma mensagem do tipo "${message.type}", mas por enquanto só estou tratando texto.
+        `✅ Confirmado!
 
-Em breve vou conseguir analisar áudio, imagem e comprovantes.`
+Ainda não salvei no Base44, mas a próxima etapa será gravar este lançamento no sistema:
+
+${JSON.stringify(action, null, 2)}`
       );
 
       return res.sendStatus(200);
     }
 
-    const text = message.text?.body || "";
+    if (text === "2" && pendingActions[from]) {
+      delete pendingActions[from];
+      await sendWhatsAppMessage(from, "Lançamento cancelado.");
+      return res.sendStatus(200);
+    }
 
-    console.log(`Recebido de ${from}: ${text}`);
+    const result = await interpretFinancialMessage(text);
 
-    const reply = getInitialReply(text);
+    if (result.action === "create_transaction" && result.amount) {
+      pendingActions[from] = result;
+    }
 
-    await sendWhatsAppMessage(from, reply);
-
-    console.log("Resposta enviada com sucesso.");
-
+    await sendWhatsAppMessage(from, formatPreview(result));
     return res.sendStatus(200);
   } catch (error) {
-    console.error("Erro no webhook:");
     console.error(error.response?.data || error.message);
     return res.sendStatus(200);
   }
@@ -126,7 +161,4 @@ app.get("/", (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
