@@ -356,6 +356,193 @@ async function createTransaction(userId, action) {
   }
 }
 
+function formatMoney(value) {
+  return Number(value || 0).toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL"
+  });
+}
+
+function getAmount(item) {
+  return Number(
+    item.amount ||
+    item.value ||
+    item.valor ||
+    item.current_value ||
+    item.remaining_amount ||
+    item.original_amount ||
+    0
+  );
+}
+
+function getDateValue(item) {
+  return item.date || item.due_date || item.created_at || item.created_date || null;
+}
+
+function isCurrentMonth(dateValue) {
+  if (!dateValue) return false;
+
+  const date = new Date(dateValue);
+  const now = new Date();
+
+  return (
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth()
+  );
+}
+
+function isSameUser(item, linkedUser) {
+  const possibleUserIds = [
+    linkedUser.user_id,
+    linkedUser.user,
+    linkedUser.created_by,
+    linkedUser.created_by_id
+  ].filter(Boolean).map(String);
+
+  const itemUsers = [
+    item.user_id,
+    item.user,
+    item.created_by,
+    item.created_by_id,
+    item.owner_id
+  ].filter(Boolean).map(String);
+
+  return itemUsers.some((u) => possibleUserIds.includes(u));
+}
+
+async function safeListEntity(entityName) {
+  try {
+    return await listEntity(entityName);
+  } catch (error) {
+    console.log(`Erro ao listar ${entityName}:`, error.response?.data || error.message);
+    return [];
+  }
+}
+
+async function handleFinanceQuery(linkedUser, data) {
+  const [incomesRaw, expensesRaw, debtsRaw, investmentsRaw, goalsRaw, subscriptionsRaw] =
+    await Promise.all([
+      safeListEntity("Income"),
+      safeListEntity("Expense"),
+      safeListEntity("Debt"),
+      safeListEntity("Investment"),
+      safeListEntity("Goal"),
+      safeListEntity("Subscription")
+    ]);
+
+  const incomes = incomesRaw.filter((item) => isSameUser(item, linkedUser));
+  const expenses = expensesRaw.filter((item) => isSameUser(item, linkedUser));
+  const debts = debtsRaw.filter((item) => isSameUser(item, linkedUser));
+  const investments = investmentsRaw.filter((item) => isSameUser(item, linkedUser));
+  const goals = goalsRaw.filter((item) => isSameUser(item, linkedUser));
+  const subscriptions = subscriptionsRaw.filter((item) => isSameUser(item, linkedUser));
+
+  const incomesMonth = incomes.filter((item) => isCurrentMonth(getDateValue(item)));
+  const expensesMonth = expenses.filter((item) => isCurrentMonth(getDateValue(item)));
+
+  const totalIncomeMonth = incomesMonth.reduce((sum, item) => sum + getAmount(item), 0);
+  const totalExpenseMonth = expensesMonth.reduce((sum, item) => sum + getAmount(item), 0);
+  const totalDebt = debts.reduce((sum, item) => sum + getAmount(item), 0);
+  const totalInvested = investments.reduce((sum, item) => sum + getAmount(item), 0);
+  const totalSubscriptions = subscriptions.reduce((sum, item) => sum + getAmount(item), 0);
+
+  const balance = totalIncomeMonth - totalExpenseMonth;
+
+  if (data.query_type === "balance") {
+    return `📊 Seu saldo estimado deste mês:
+
+Receitas: ${formatMoney(totalIncomeMonth)}
+Despesas: ${formatMoney(totalExpenseMonth)}
+Assinaturas: ${formatMoney(totalSubscriptions)}
+
+Saldo disponível: ${formatMoney(balance)}
+
+Investido: ${formatMoney(totalInvested)}
+Dívidas em aberto: ${formatMoney(totalDebt)}`;
+  }
+
+  if (data.query_type === "expenses_month") {
+    return `💸 Suas despesas deste mês:
+
+Total: ${formatMoney(totalExpenseMonth)}
+Quantidade: ${expensesMonth.length} lançamento(s)
+
+Maiores despesas:
+${expensesMonth
+  .sort((a, b) => getAmount(b) - getAmount(a))
+  .slice(0, 5)
+  .map((item) => `• ${item.description || item.name || "Despesa"}: ${formatMoney(getAmount(item))}`)
+  .join("\n") || "Nenhuma despesa encontrada."}`;
+  }
+
+  if (data.query_type === "income_month") {
+    return `💰 Suas receitas deste mês:
+
+Total: ${formatMoney(totalIncomeMonth)}
+Quantidade: ${incomesMonth.length} lançamento(s)
+
+Receitas:
+${incomesMonth
+  .slice(0, 5)
+  .map((item) => `• ${item.description || item.name || "Receita"}: ${formatMoney(getAmount(item))}`)
+  .join("\n") || "Nenhuma receita encontrada."}`;
+  }
+
+  if (data.query_type === "debts") {
+    return `📌 Suas dívidas:
+
+Total em aberto: ${formatMoney(totalDebt)}
+Quantidade: ${debts.length}
+
+${debts
+  .slice(0, 5)
+  .map((item) => `• ${item.description || item.name || "Dívida"}: ${formatMoney(getAmount(item))}`)
+  .join("\n") || "Nenhuma dívida encontrada."}`;
+  }
+
+  if (data.query_type === "investments") {
+    return `📈 Seus investimentos:
+
+Total investido: ${formatMoney(totalInvested)}
+Quantidade: ${investments.length}
+
+${investments
+  .slice(0, 5)
+  .map((item) => `• ${item.description || item.name || "Investimento"}: ${formatMoney(getAmount(item))}`)
+  .join("\n") || "Nenhum investimento encontrado."}`;
+  }
+
+  if (data.query_type === "goals") {
+    return `🎯 Suas metas:
+
+Quantidade: ${goals.length}
+
+${goals
+  .slice(0, 5)
+  .map((item) => `• ${item.name || item.description || "Meta"}: ${formatMoney(getAmount(item))}`)
+  .join("\n") || "Nenhuma meta encontrada."}`;
+  }
+
+  if (data.query_type === "due_bills") {
+    return `📅 Próximas contas/assinaturas:
+
+Dívidas:
+${debts.slice(0, 5).map((item) => `• ${item.description || item.name || "Dívida"}: ${formatMoney(getAmount(item))}`).join("\n") || "Nenhuma dívida encontrada."}
+
+Assinaturas:
+${subscriptions.slice(0, 5).map((item) => `• ${item.name || "Assinatura"}: ${formatMoney(getAmount(item))}`).join("\n") || "Nenhuma assinatura encontrada."}`;
+  }
+
+  return `📊 Resumo financeiro deste mês:
+
+Receitas: ${formatMoney(totalIncomeMonth)}
+Despesas: ${formatMoney(totalExpenseMonth)}
+Saldo: ${formatMoney(balance)}
+Investimentos: ${formatMoney(totalInvested)}
+Dívidas: ${formatMoney(totalDebt)}
+Assinaturas: ${formatMoney(totalSubscriptions)}`;
+}
+
 function welcomeMessage(isLinked = false) {
   if (!isLinked) {
     return `Olá! 👋 Eu sou seu Assistente Financeiro IA.
@@ -700,14 +887,18 @@ ${error.response?.data?.message || error.message}`
     }
 
     if (data.action === "query") {
-      await sendWhatsAppMessage(
-        from,
-        `Entendi sua consulta: ${data.query_type || "consulta financeira"}.
+      const responseText = await handleFinanceQuery(linkedUser, data);
 
-Ainda vou conectar essa consulta aos dados reais do Base44.
+      await sendWhatsAppMessage(from, responseText);
 
-Por enquanto já consigo preparar lançamentos por mensagem.`
-      );
+      await saveMessageLog({
+        userId: linkedUser.user_id,
+        whatsappNumber: from,
+        messageText: text,
+        responseText,
+        actionJson: data,
+        status: "query_executed"
+      });
 
       return res.sendStatus(200);
     }
