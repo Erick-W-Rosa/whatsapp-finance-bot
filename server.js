@@ -575,7 +575,7 @@ Receitas: ${formatMoney(totalIncomeMonth)}
 Despesas: ${formatMoney(totalExpenseMonth)}
 Saldo: ${formatMoney(balance)}
 Investimentos: ${formatMoney(totalInvested)}
-Dívidas: ${formatMoney(totalDebt)}
+Dívidas: ${formatMoney(totalDebtOpen)}
 Assinaturas: ${formatMoney(totalSubscriptions)}`;
 }
 
