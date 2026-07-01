@@ -10,16 +10,31 @@ app.use(express.json());
 const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
 const ACCESS_TOKEN = process.env.META_ACCESS_TOKEN;
 const PHONE_NUMBER_ID = process.env.META_PHONE_NUMBER_ID;
+
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
-const BASE44_API_URL = process.env.BASE44_API_URL;
+const BASE44_API_URL = process.env.BASE44_API_URL || "https://app.base44.com/api";
+const BASE44_APP_ID = process.env.BASE44_APP_ID;
 const BASE44_API_KEY = process.env.BASE44_API_KEY;
+
+const ENTITY_WHATSAPP_LINKS = "WhatsAppUserLink";
+const ENTITY_WHATSAPP_MESSAGES = "WhatsAppMessage";
 
 const ai = new GoogleGenAI({
   apiKey: GEMINI_API_KEY
 });
 
 const pendingActions = {};
+
+function getBase44Root() {
+  let root = String(BASE44_API_URL || "").replace(/\/$/, "");
+
+  if (root.endsWith("/api") && BASE44_APP_ID) {
+    root = `${root}/apps/${BASE44_APP_ID}`;
+  }
+
+  return root;
+}
 
 async function sendWhatsAppMessage(to, body) {
   await axios.post(
@@ -39,12 +54,55 @@ async function sendWhatsAppMessage(to, body) {
   );
 }
 
+async function base44Request(method, path, data = null, params = null) {
+  if (!BASE44_API_KEY) {
+    throw new Error("BASE44_API_KEY não configurada.");
+  }
+
+  const response = await axios({
+    method,
+    url: `${getBase44Root()}${path}`,
+    data,
+    params,
+    headers: {
+      api_key: BASE44_API_KEY,
+      "Content-Type": "application/json"
+    }
+  });
+
+  return response.data;
+}
+
+async function listEntity(entityName) {
+  const result = await base44Request("GET", `/entities/${entityName}`);
+
+  if (Array.isArray(result)) return result;
+  if (Array.isArray(result.data)) return result.data;
+  if (Array.isArray(result.items)) return result.items;
+  if (Array.isArray(result.records)) return result.records;
+
+  console.log("Retorno inesperado do Base44:", JSON.stringify(result, null, 2));
+  return [];
+}
+
+async function createEntity(entityName, data) {
+  return await base44Request("POST", `/entities/${entityName}`, data);
+}
+
+async function updateEntity(entityName, id, data) {
+  return await base44Request("PUT", `/entities/${entityName}/${id}`, data);
+}
+
 function normalizeText(text) {
   return String(text || "").trim();
 }
 
+function normalizePhone(phone) {
+  return String(phone || "").replace(/\D/g, "");
+}
+
 function isLinkCode(text) {
-  return /^SM-\d{6}$/i.test(text.trim());
+  return /^SM-[A-Z0-9]{6}$/i.test(String(text || "").trim());
 }
 
 function cleanJson(text) {
@@ -54,56 +112,226 @@ function cleanJson(text) {
     .trim();
 }
 
-async function base44Request(method, path, data = null) {
-  if (!BASE44_API_URL || !BASE44_API_KEY) {
-    throw new Error("BASE44_API_URL ou BASE44_API_KEY não configurado.");
-  }
+function getUserIdFromLink(link) {
+  return (
+    link.user_id ||
+    link.userId ||
+    link.user?.id ||
+    link.user ||
+    link.created_by ||
+    link.created_by_id ||
+    null
+  );
+}
 
-  const response = await axios({
-    method,
-    url: `${BASE44_API_URL}${path}`,
-    data,
-    headers: {
-      Authorization: `Bearer ${BASE44_API_KEY}`,
-      "Content-Type": "application/json"
-    }
-  });
+function getLinkCode(link) {
+  return String(link.code || link.codigo || "").toUpperCase();
+}
 
-  return response.data;
+function getLinkStatus(link) {
+  return String(link.status || "").toLowerCase();
 }
 
 async function findUserByWhatsAppNumber(whatsappNumber) {
   try {
-    return await base44Request(
-      "GET",
-      `/api/whatsapp/user-by-number?whatsapp_number=${encodeURIComponent(whatsappNumber)}`
-    );
+    const cleanNumber = normalizePhone(whatsappNumber);
+    const records = await listEntity(ENTITY_WHATSAPP_LINKS);
+
+    const found = records.find((item) => {
+      const itemNumber = normalizePhone(
+        item.whatsapp_number ||
+        item.phone ||
+        item.telefone ||
+        item.number ||
+        ""
+      );
+
+      const status = getLinkStatus(item);
+
+      return (
+        itemNumber === cleanNumber &&
+        (status === "linked" || status === "vinculado" || item.active === true)
+      );
+    });
+
+    if (!found) {
+      console.log("Usuário não vinculado ou erro ao buscar usuário.");
+      return null;
+    }
+
+    return {
+      ...found,
+      user_id: getUserIdFromLink(found)
+    };
   } catch (error) {
-    console.log("Usuário não vinculado ou erro ao buscar usuário.");
+    console.log("Erro ao buscar vínculo:", error.response?.data || error.message);
     return null;
   }
 }
 
 async function linkWhatsAppCode(code, whatsappNumber) {
-  return await base44Request("POST", "/api/whatsapp/link-code", {
-    code,
-    whatsapp_number: whatsappNumber
+  const cleanCode = code.toUpperCase();
+  const cleanNumber = normalizePhone(whatsappNumber);
+
+  const records = await listEntity(ENTITY_WHATSAPP_LINKS);
+
+  console.log("Registros WhatsAppUserLink:");
+  console.log(JSON.stringify(records, null, 2));
+
+  const link = records.find((item) => {
+    const status = getLinkStatus(item);
+
+    return (
+      getLinkCode(item) === cleanCode &&
+      (status === "pending" || status === "pendente")
+    );
   });
+
+  if (!link) {
+    throw new Error("Código inválido, expirado ou já utilizado.");
+  }
+
+  if (link.expires_at && new Date(link.expires_at) < new Date()) {
+    await updateEntity(ENTITY_WHATSAPP_LINKS, link.id, {
+      status: "expired",
+      active: false
+    });
+
+    throw new Error("Código expirado.");
+  }
+
+  const alreadyLinked = records.filter((item) => {
+    const itemNumber = normalizePhone(
+      item.whatsapp_number ||
+      item.phone ||
+      item.telefone ||
+      item.number ||
+      ""
+    );
+
+    const status = getLinkStatus(item);
+
+    return (
+      itemNumber === cleanNumber &&
+      (status === "linked" || status === "vinculado" || item.active === true)
+    );
+  });
+
+  for (const item of alreadyLinked) {
+    await updateEntity(ENTITY_WHATSAPP_LINKS, item.id, {
+      status: "cancelled",
+      active: false
+    });
+  }
+
+  const updated = await updateEntity(ENTITY_WHATSAPP_LINKS, link.id, {
+    whatsapp_number: cleanNumber,
+    phone: cleanNumber,
+    telefone: cleanNumber,
+    status: "linked",
+    active: true,
+    linked_at: new Date().toISOString()
+  });
+
+  return {
+    ...updated,
+    user_id: getUserIdFromLink(updated) || getUserIdFromLink(link)
+  };
+}
+
+async function saveMessageLog({
+  userId,
+  whatsappNumber,
+  messageText,
+  responseText,
+  actionJson,
+  status
+}) {
+  try {
+    await createEntity(ENTITY_WHATSAPP_MESSAGES, {
+      user_id: userId || null,
+      whatsapp_number: normalizePhone(whatsappNumber),
+      message_text: messageText || "",
+      response_text: responseText || "",
+      action_json: actionJson ? JSON.stringify(actionJson) : "",
+      status: status || "processed",
+      created_at: new Date().toISOString()
+    });
+  } catch (error) {
+    console.log("Não foi possível salvar histórico:", error.response?.data || error.message);
+  }
+}
+
+function toIsoDate(dateValue) {
+  const now = new Date();
+
+  if (dateValue === "yesterday") now.setDate(now.getDate() - 1);
+  if (dateValue === "tomorrow") now.setDate(now.getDate() + 1);
+
+  return now.toISOString().slice(0, 10);
 }
 
 async function createTransaction(userId, action) {
-  return await base44Request("POST", "/api/transactions/from-whatsapp", {
-    user_id: userId,
-    source: "whatsapp",
-    action
-  });
-}
+  const entityByType = {
+    expense: "Expense",
+    income: "Income",
+    debt: "Debt",
+    investment: "Investment"
+  };
 
-async function queryFinance(userId, query) {
-  return await base44Request("POST", "/api/finance/query-whatsapp", {
+  const entityName = entityByType[action.type];
+
+  if (!entityName) {
+    throw new Error(`Tipo não suportado: ${action.type}`);
+  }
+
+  const payload = {
     user_id: userId,
-    query
-  });
+    user: userId,
+    source: "whatsapp",
+    description: action.description || action.category || "Lançamento WhatsApp",
+    category: action.category || "Outros",
+    amount: Number(action.amount),
+    date: toIsoDate(action.date),
+    status: action.status || "paid",
+    payment_method: action.payment_method || null,
+    account: action.account || null,
+    card: action.card || null,
+    installments: action.installments || null,
+    notes: action.notes || "",
+    created_at: new Date().toISOString()
+  };
+
+  if (entityName === "Expense") {
+    return await createEntity("Expense", {
+      ...payload,
+      paid: action.status === "paid"
+    });
+  }
+
+  if (entityName === "Income") {
+    return await createEntity("Income", {
+      ...payload,
+      received: action.status === "received"
+    });
+  }
+
+  if (entityName === "Debt") {
+    return await createEntity("Debt", {
+      ...payload,
+      original_amount: Number(action.amount),
+      remaining_amount: Number(action.amount),
+      monthly_interest: action.monthly_interest || 0
+    });
+  }
+
+  if (entityName === "Investment") {
+    return await createEntity("Investment", {
+      ...payload,
+      initial_amount: Number(action.amount),
+      current_value: Number(action.amount)
+    });
+  }
 }
 
 function welcomeMessage(isLinked = false) {
@@ -113,13 +341,14 @@ function welcomeMessage(isLinked = false) {
 Antes de lançar despesas, receitas ou consultar seus dados, preciso vincular seu WhatsApp à sua conta.
 
 No app, vá em:
+
 Configuração WhatsApp → Gerar código de vínculo
 
 Depois envie aqui somente o código, por exemplo:
 
 SM-123456
 
-Depois de vincular, você poderá me mandar coisas como:
+Depois disso você poderá me mandar:
 
 • Gastei 35 reais com lanche hoje
 • Recebi 1500 de salário
@@ -129,7 +358,7 @@ Depois de vincular, você poderá me mandar coisas como:
 
   return `Olá! 👋 Seu WhatsApp já está vinculado.
 
-Você pode me mandar:
+Você pode me mandar naturalmente:
 
 • Gastei 35 reais com lanche hoje
 • Recebi 1500 de salário
@@ -143,54 +372,52 @@ async function interpretFinancialMessage(text, isLinked) {
   const prompt = `
 Você é um assistente financeiro brasileiro para WhatsApp.
 
-Interprete a mensagem abaixo e retorne SOMENTE JSON válido, sem markdown e sem explicações.
+Retorne SOMENTE JSON válido, sem markdown.
 
 Mensagem:
 "${text}"
 
 Contexto:
-- O usuário ${isLinked ? "já está vinculado ao sistema" : "ainda NÃO está vinculado ao sistema"}.
-- Se o usuário não estiver vinculado e mandar saudação, explique que ele precisa enviar o código gerado no app.
-- Código de vínculo tem formato SM-999999.
-- Se a mensagem for apenas saudação, conversa comum, agradecimento ou pedido de ajuda, use action = "chat".
-- Se for lançamento financeiro, use action = "create_transaction".
-- Se for consulta financeira, use action = "query".
-- Se for confirmação, use action = "confirm".
-- Se for cancelamento, use action = "cancel".
-- Se não entender, use action = "unknown".
+O usuário ${isLinked ? "já está vinculado" : "ainda não está vinculado"}.
 
-Palavras de confirmação:
-sim, confirmar, confirma, lançar, pode lançar, 1
+Regras:
+- Saudação ou conversa normal: action = "chat".
+- Lançamento financeiro: action = "create_transaction".
+- Consulta financeira: action = "query".
+- Confirmação: action = "confirm".
+- Cancelamento: action = "cancel".
+- Se não entender: action = "unknown".
 
-Palavras de cancelamento:
-cancelar, cancela, não, 2
-
-Categorias sugeridas:
+Categorias:
 Alimentação, Mercado, Lazer, Saúde, Transporte, Combustível, Moradia, Salário, Renda Extra, Assinaturas, Investimentos, Dívidas, Outros.
+
+Tipos:
+- gasto, gastei, comprei, paguei = expense.
+- recebi, salário, pagamento recebido, freela recebido = income.
+- empréstimo, financiamento, dívida = debt.
+- investi, apliquei, CDB, poupança, ações, cripto = investment.
 
 Datas:
 hoje = today
 ontem = yesterday
 amanhã = tomorrow
-se não informar data em lançamento, use today
+se não informar, use today.
 
 Status:
-- gasto, gastei, paguei, comprei = paid
-- recebi = received
-- vencendo, a pagar, parcela futura = pending
+gastei, paguei, comprei = paid
+recebi = received
+a pagar, vencendo, futura = pending
 
-Retorne um dos formatos abaixo.
-
-Conversa normal:
+Conversa:
 {
   "action": "chat",
-  "message": "mensagem natural para responder ao usuário"
+  "message": "resposta natural"
 }
 
 Lançamento:
 {
   "action": "create_transaction",
-  "type": "expense | income | debt | investment | transfer",
+  "type": "expense | income | debt | investment",
   "description": "string",
   "category": "string",
   "amount": number,
@@ -200,15 +427,17 @@ Lançamento:
   "account": null,
   "card": null,
   "installments": null,
+  "monthly_interest": null,
+  "notes": null,
   "confidence": number
 }
 
 Consulta:
 {
   "action": "query",
-  "query_type": "balance | expenses_month | income_month | due_bills | summary | debts | unknown",
+  "query_type": "balance | expenses_month | income_month | due_bills | summary | debts | investments | goals | unknown",
   "period": "today | current_month | next_month | current_week | null",
-  "message": "resposta curta dizendo que vai consultar os dados",
+  "message": "resposta curta",
   "confidence": number
 }
 
@@ -225,7 +454,7 @@ Cancelamento:
 Desconhecido:
 {
   "action": "unknown",
-  "message": "mensagem amigável pedindo para o usuário explicar melhor"
+  "message": "mensagem amigável"
 }
 `;
 
@@ -237,8 +466,7 @@ Desconhecido:
     }
   });
 
-  const content = cleanJson(response.text || "");
-  return JSON.parse(content);
+  return JSON.parse(cleanJson(response.text || ""));
 }
 
 function formatTransactionPreview(data) {
@@ -247,7 +475,6 @@ function formatTransactionPreview(data) {
     data.type === "income" ? "Receita" :
     data.type === "debt" ? "Dívida" :
     data.type === "investment" ? "Investimento" :
-    data.type === "transfer" ? "Transferência" :
     "Lançamento";
 
   const valor = Number(data.amount || 0).toLocaleString("pt-BR", {
@@ -282,6 +509,7 @@ Parcelas: ${data.installments || "-"}
 
 Deseja lançar?
 Responda:
+
 1 - Sim
 2 - Cancelar`;
 }
@@ -303,68 +531,80 @@ app.post("/webhook/whatsapp", async (req, res) => {
     const value = req.body?.entry?.[0]?.changes?.[0]?.value;
     const message = value?.messages?.[0];
 
-    if (!message) {
-      return res.sendStatus(200);
-    }
+    if (!message) return res.sendStatus(200);
 
     const from = message.from;
 
     if (message.type !== "text") {
       await sendWhatsAppMessage(
         from,
-        "Recebi sua mensagem, mas por enquanto estou entendendo apenas texto. Em breve vou analisar imagens, comprovantes e áudios."
+        "Recebi sua mensagem, mas por enquanto estou entendendo apenas texto. Em breve vou analisar comprovantes, imagens e áudios."
       );
+
       return res.sendStatus(200);
     }
 
     const text = normalizeText(message.text?.body);
-
     console.log(`Mensagem de ${from}: ${text}`);
 
-    let linkedUser = await findUserByWhatsAppNumber(from);
+    const linkedUser = await findUserByWhatsAppNumber(from);
     const isLinked = !!linkedUser?.user_id;
 
     if (isLinkCode(text)) {
       try {
-        const result = await linkWhatsAppCode(text.toUpperCase(), from);
+        const result = await linkWhatsAppCode(text, from);
 
-        await sendWhatsAppMessage(
-          from,
-          `✅ WhatsApp vinculado com sucesso!
+        const responseText = `✅ WhatsApp vinculado com sucesso!
 
 Agora você pode lançar despesas, receitas e consultar suas informações financeiras por aqui.
 
 Exemplos:
+
 • Gastei 35 reais com lanche hoje
 • Recebi 1500 de salário
-• Quanto gastei esse mês?`
-        );
+• Quanto gastei esse mês?`;
+
+        await sendWhatsAppMessage(from, responseText);
+
+        await saveMessageLog({
+          userId: result.user_id,
+          whatsappNumber: from,
+          messageText: text,
+          responseText,
+          actionJson: result,
+          status: "linked"
+        });
 
         return res.sendStatus(200);
       } catch (error) {
-        await sendWhatsAppMessage(
-          from,
-          `Não consegui vincular esse código.
+        console.error("Erro ao vincular:", error.response?.data || error.message);
+
+        const responseText = `Não consegui vincular esse código.
 
 Verifique se ele está correto e se ainda não expirou.
 
 No app, gere um novo código em:
-Configuração WhatsApp → Gerar código de vínculo`
-        );
 
+Configuração WhatsApp → Gerar código de vínculo`;
+
+        await sendWhatsAppMessage(from, responseText);
         return res.sendStatus(200);
       }
     }
 
     if (!isLinked) {
-      const data = await interpretFinancialMessage(text, false);
+      const responseText = welcomeMessage(false);
 
-      if (data.action === "chat") {
-        await sendWhatsAppMessage(from, data.message || welcomeMessage(false));
-        return res.sendStatus(200);
-      }
+      await sendWhatsAppMessage(from, responseText);
 
-      await sendWhatsAppMessage(from, welcomeMessage(false));
+      await saveMessageLog({
+        userId: null,
+        whatsappNumber: from,
+        messageText: text,
+        responseText,
+        status: "not_linked"
+      });
+
       return res.sendStatus(200);
     }
 
@@ -376,23 +616,35 @@ Configuração WhatsApp → Gerar código de vínculo`
         delete pendingActions[from];
 
         try {
-          const result = await createTransaction(linkedUser.user_id, action);
+          const saved = await createTransaction(linkedUser.user_id, action);
 
-          await sendWhatsAppMessage(
-            from,
-            `✅ Lançamento confirmado e salvo no sistema!
+          const responseText = `✅ Lançamento salvo com sucesso!
 
-${result?.message || "Registro criado com sucesso."}`
-          );
+Descrição: ${action.description}
+Valor: ${Number(action.amount).toLocaleString("pt-BR", {
+            style: "currency",
+            currency: "BRL"
+          })}`;
+
+          await sendWhatsAppMessage(from, responseText);
+
+          await saveMessageLog({
+            userId: linkedUser.user_id,
+            whatsappNumber: from,
+            messageText: text,
+            responseText,
+            actionJson: saved,
+            status: "transaction_created"
+          });
         } catch (error) {
+          console.error("Erro ao salvar lançamento:", error.response?.data || error.message);
+
           await sendWhatsAppMessage(
             from,
-            `✅ Confirmei o lançamento, mas ainda não consegui salvar no Base44.
+            `Confirmei, mas não consegui salvar no Base44.
 
-Provável motivo: endpoint do Base44 ainda não configurado.
-
-Dados:
-${JSON.stringify(action, null, 2)}`
+Erro:
+${error.response?.data?.message || error.message}`
           );
         }
 
@@ -409,54 +661,66 @@ ${JSON.stringify(action, null, 2)}`
     const data = await interpretFinancialMessage(text, true);
 
     if (data.action === "chat") {
-      await sendWhatsAppMessage(from, data.message || welcomeMessage(true));
+      const responseText = data.message || welcomeMessage(true);
+
+      await sendWhatsAppMessage(from, responseText);
+
+      await saveMessageLog({
+        userId: linkedUser.user_id,
+        whatsappNumber: from,
+        messageText: text,
+        responseText,
+        actionJson: data,
+        status: "chat"
+      });
+
       return res.sendStatus(200);
     }
 
     if (data.action === "query") {
-      try {
-        const result = await queryFinance(linkedUser.user_id, data);
+      await sendWhatsAppMessage(
+        from,
+        `Entendi sua consulta: ${data.query_type || "consulta financeira"}.
 
-        await sendWhatsAppMessage(
-          from,
-          result?.message || "Consulta realizada."
-        );
-      } catch (error) {
-        await sendWhatsAppMessage(
-          from,
-          `Entendi sua consulta, mas ainda não consegui buscar os dados no Base44.
+Ainda vou conectar essa consulta aos dados reais do Base44.
 
-Consulta: ${data.query_type || "não informada"}
-Período: ${data.period || "não informado"}
-
-Próxima etapa: configurar o endpoint de consultas no Base44.`
-        );
-      }
+Por enquanto já consigo preparar lançamentos por mensagem.`
+      );
 
       return res.sendStatus(200);
     }
 
     if (data.action === "create_transaction" && data.amount) {
       pendingActions[from] = data;
-      await sendWhatsAppMessage(from, formatTransactionPreview(data));
+
+      const responseText = formatTransactionPreview(data);
+
+      await sendWhatsAppMessage(from, responseText);
+
+      await saveMessageLog({
+        userId: linkedUser.user_id,
+        whatsappNumber: from,
+        messageText: text,
+        responseText,
+        actionJson: data,
+        status: "pending_confirmation"
+      });
+
       return res.sendStatus(200);
     }
 
-    if (data.action === "unknown") {
-      await sendWhatsAppMessage(
-        from,
-        data.message || `Não entendi totalmente.
+    await sendWhatsAppMessage(
+      from,
+      data.message ||
+      `Não entendi totalmente.
 
-Você pode me enviar algo como:
+Você pode me mandar, por exemplo:
+
 • Gastei 35 reais com lanche hoje
 • Recebi 1500 de salário
 • Quanto gastei esse mês?`
-      );
+    );
 
-      return res.sendStatus(200);
-    }
-
-    await sendWhatsAppMessage(from, welcomeMessage(true));
     return res.sendStatus(200);
   } catch (error) {
     console.error("Erro no webhook:");
@@ -482,7 +746,7 @@ Você pode me enviar algo como:
 });
 
 app.get("/", (req, res) => {
-  res.send("Bot financeiro WhatsApp online com Gemini e vínculo de usuários.");
+  res.send("Bot financeiro WhatsApp online com Gemini, Base44 e vínculo de usuários.");
 });
 
 const PORT = process.env.PORT || 3000;
