@@ -248,15 +248,37 @@ async function saveMessageLog({
   status
 }) {
   try {
-    await createEntity(ENTITY_WHATSAPP_MESSAGES, {
-      user_id: userId || null,
-      whatsapp_number: normalizePhone(whatsappNumber),
-      message_text: messageText || "",
-      response_text: responseText || "",
-      action_json: actionJson ? JSON.stringify(actionJson) : "",
-      status: status || "processed",
-      created_at: new Date().toISOString()
-    });
+    if (messageText) {
+      await createEntity(ENTITY_WHATSAPP_MESSAGES, {
+        user_id: userId || null,
+        whatsapp_number: normalizePhone(whatsappNumber),
+
+        content: messageText,
+        direction: "incoming",
+
+        message_text: messageText || "",
+        response_text: "",
+        action_json: actionJson ? JSON.stringify(actionJson) : "",
+        status: status || "processed",
+        created_at: new Date().toISOString()
+      });
+    }
+
+    if (responseText) {
+      await createEntity(ENTITY_WHATSAPP_MESSAGES, {
+        user_id: userId || null,
+        whatsapp_number: normalizePhone(whatsappNumber),
+
+        content: responseText,
+        direction: "outgoing",
+
+        message_text: "",
+        response_text: responseText || "",
+        action_json: actionJson ? JSON.stringify(actionJson) : "",
+        status: status || "processed",
+        created_at: new Date().toISOString()
+      });
+    }
   } catch (error) {
     console.log("Não foi possível salvar histórico:", error.response?.data || error.message);
   }
