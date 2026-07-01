@@ -447,33 +447,72 @@ async function handleFinanceQuery(linkedUser, data) {
   const totalExpenseMonth = expensesMonth.reduce((sum, item) => sum + getAmount(item), 0);
   const debtsMonth = debts.filter((item) => isCurrentMonth(getDateValue(item)));
 
-  const activeDebts = debts.filter((item) => {
-    const status = String(item.status || "").toLowerCase();
-    return item.active === true || status === "active" || status === "ativa" || status === "";
-  });
   const now = new Date();
+const currentMonth = now.getMonth();
+const currentYear = now.getFullYear();
 
-const totalDebtMonth = activeDebts.reduce((sum, item) => {
-  const currentInstallment = Number(item.current_installment || 0);
-  const totalInstallments = Number(item.installments_count || 0);
+const activeDebts = debts.filter((item) => {
+  const status = String(item.status || "").toLowerCase();
 
-  if (totalInstallments > 0 && currentInstallment > totalInstallments) {
-    return sum;
+  if (status === "paid" || status === "quitada" || status === "cancelled") {
+    return false;
   }
 
-  const installmentAmount = Number(item.installment_amount || 0);
+  const firstDueDate = item.first_due_date ? new Date(item.first_due_date) : null;
+  const currentInstallment = Number(item.current_installment || 1);
+
+  if (!firstDueDate) return false;
+
+  const installmentDate = new Date(firstDueDate);
+  installmentDate.setMonth(firstDueDate.getMonth() + currentInstallment - 1);
+
+  return (
+    installmentDate.getMonth() === currentMonth &&
+    installmentDate.getFullYear() === currentYear
+  );
+});
+
+const debtInstallmentsMonth = activeDebts.map((item) => {
+  const totalAmount = Number(item.total_amount || 0);
+  const installmentsCount = Number(item.installments_count || 0);
+  const currentInstallment = Number(item.current_installment || 1);
+
+  if (installmentsCount > 0 && currentInstallment > installmentsCount) {
+    return {
+      ...item,
+      used_installment_amount: 0
+    };
+  }
+
+  let installmentAmount = Number(item.installment_amount || 0);
+
+  if (!installmentAmount && totalAmount && installmentsCount) {
+    installmentAmount = totalAmount / installmentsCount;
+  }
+
+  if (installmentAmount > totalAmount && installmentsCount > 0) {
+    installmentAmount = totalAmount / installmentsCount;
+  }
 
   console.log("DÍVIDA CALCULADA:", {
     name: item.name,
-    total_amount: item.total_amount,
-    installments_count: item.installments_count,
-    current_installment: item.current_installment,
+    total_amount: totalAmount,
+    installments_count: installmentsCount,
+    current_installment: currentInstallment,
     installment_amount: item.installment_amount,
     usado_no_mes: installmentAmount
   });
 
-  return sum + installmentAmount;
+  return {
+    ...item,
+    used_installment_amount: installmentAmount
+  };
+});
+
+const totalDebtMonth = activeDebts.reduce((sum, item) => {
+  return sum + Number(item.installment_amount || 0);
 }, 0);
+  
   const totalDebtOpen = debts.reduce(
     (sum, item) => sum + Number(item.total_amount || 0),
     0
@@ -494,7 +533,10 @@ Receitas: ${formatMoney(totalIncomeMonth)}
 
 Despesas lançadas: ${formatMoney(totalExpenseMonth)}
 Assinaturas: ${formatMoney(totalSubscriptions)}
-Dívidas/parcelas do mês: ${formatMoney(totalDebtMonth)}
+Dívidas/parcelas do mês: ${debtInstallmentsMonth
+  .filter((item) => Number(item.used_installment_amount || 0) > 0)
+  .map((item) => `• ${item.name || "Dívida"}: ${formatMoney(item.used_installment_amount)}`)
+  .join("\n")}
 
 Total comprometido: ${formatMoney(totalCommittedMonth)}
 
