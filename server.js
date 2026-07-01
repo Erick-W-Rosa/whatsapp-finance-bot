@@ -363,6 +363,17 @@ function formatMoney(value) {
   });
 }
 
+function getDebtMonthlyAmount(item) {
+  return Number(
+    item.installment_amount ||
+    item.monthly_payment ||
+    item.valor_parcela ||
+    item.parcel_amount ||
+    item.amount ||
+    0
+  );
+}
+
 function getAmount(item) {
   return Number(
     item.amount ||
@@ -444,7 +455,14 @@ async function handleFinanceQuery(linkedUser, data) {
   const totalExpenseMonth = expensesMonth.reduce((sum, item) => sum + getAmount(item), 0);
   const debtsMonth = debts.filter((item) => isCurrentMonth(getDateValue(item)));
 
-  const totalDebtMonth = debtsMonth.reduce((sum, item) => sum + getAmount(item), 0);
+  const activeDebts = debts.filter((item) => {
+    const status = String(item.status || "").toLowerCase();
+    return item.active === true || status === "active" || status === "ativa" || status === "";
+  });
+  const totalDebtMonth = activeDebts.reduce(
+    (sum, item) => sum + getDebtMonthlyAmount(item),
+    0
+  );
   const totalDebtOpen = debts.reduce((sum, item) => sum + getAmount(item), 0);
   const totalInvested = investments.reduce((sum, item) => sum + getAmount(item), 0);
   const totalSubscriptions = subscriptions.reduce((sum, item) => sum + getAmount(item), 0);
