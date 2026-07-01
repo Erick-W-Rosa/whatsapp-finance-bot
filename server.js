@@ -366,10 +366,12 @@ function formatMoney(value) {
 function getDebtMonthlyAmount(item) {
   return Number(
     item.installment_amount ||
+    item.monthly_installment ||
     item.monthly_payment ||
+    item.payment_amount ||
     item.valor_parcela ||
     item.parcel_amount ||
-    item.amount ||
+    item.installment_value ||
     0
   );
 }
