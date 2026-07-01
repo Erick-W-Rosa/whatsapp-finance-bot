@@ -22,10 +22,13 @@ app.get("/webhook/whatsapp", (req, res) => {
 });
 
 app.post("/webhook/whatsapp", async (req, res) => {
-  console.log("Webhook recebido:");
-  console.log(JSON.stringify(req.body, null, 2));
 
-  try {
+    console.log("==================================");
+    console.log("WEBHOOK RECEBIDO");
+    console.log(JSON.stringify(req.body, null, 2));
+    console.log("==================================");
+
+    try {
     const message = req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
 
     if (!message) {
