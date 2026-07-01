@@ -307,6 +307,25 @@ async function createTransaction(userId, action) {
     throw new Error(`Tipo não suportado: ${action.type}`);
   }
 
+  let status = action.status || "";
+
+switch (status.toLowerCase()) {
+  case "paid":
+    status = "Pago";
+    break;
+
+  case "pending":
+    status = "Pendente";
+    break;
+
+  case "received":
+    status = "Recebido";
+    break;
+
+  default:
+    status = "Pago";
+}
+  
   const payload = {
     user_id: userId,
     user: userId,
@@ -316,7 +335,7 @@ async function createTransaction(userId, action) {
     amount: Number(action.amount),
     date: toIsoDate(action.date),
     due_date: toIsoDate(action.date),
-    status: action.status || "paid",
+    status,
     payment_method: action.payment_method || null,
     account: action.account || null,
     card: action.card || null,
@@ -328,14 +347,14 @@ async function createTransaction(userId, action) {
   if (entityName === "Expense") {
     return await createEntity("Expense", {
       ...payload,
-      paid: action.status === "paid"
+      paid: status === "Pago",
     });
   }
 
   if (entityName === "Income") {
     return await createEntity("Income", {
       ...payload,
-      received: action.status === "received"
+      received: status === "Recebido"
     });
   }
 
@@ -488,7 +507,7 @@ async function handleFinanceQuery(linkedUser, data) {
   const activeDebts = debts.filter((item) => {
   const status = String(item.status || "").toLowerCase();
 
-  if (status === "paid" || status === "quitada" || status === "cancelled") {
+  if (status === "Pago" || status === "quitada" || status === "cancelled") {
     return false;
   }
 
@@ -732,9 +751,9 @@ amanhã = tomorrow
 se não informar, use today.
 
 Status:
-gastei, paguei, comprei = paid
-recebi = received
-a pagar, vencendo, futura = pending
+gastei, paguei, comprei = Pago
+recebi = Recebido
+a pagar, vencendo, futura = Pendente
 
 Conversa:
 {
@@ -750,7 +769,7 @@ Lançamento:
   "category": "string",
   "amount": number,
   "date": "today | yesterday | tomorrow | null",
-  "status": "paid | pending | received | null",
+  "status": "Pago | Pendente | Recebido | null",
   "payment_method": null,
   "account": null,
   "card": null,
