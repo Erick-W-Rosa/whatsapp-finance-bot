@@ -315,6 +315,7 @@ async function createTransaction(userId, action) {
     category: action.category || "Outros",
     amount: Number(action.amount),
     date: toIsoDate(action.date),
+    due_date: toIsoDate(action.date),
     status: action.status || "paid",
     payment_method: action.payment_method || null,
     account: action.account || null,
