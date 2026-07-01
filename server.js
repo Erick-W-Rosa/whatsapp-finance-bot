@@ -457,7 +457,7 @@ const totalDebtMonth = activeDebts.reduce((sum, item) => {
   const currentInstallment = Number(item.current_installment || 0);
   const totalInstallments = Number(item.installments_count || 0);
 
-  if (totalInstallments > 0 && currentInstallment >= totalInstallments) {
+  if (totalInstallments > 0 && currentInstallment > totalInstallments) {
     return sum;
   }
 
