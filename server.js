@@ -422,6 +422,39 @@ async function safeListEntity(entityName) {
   }
 }
 
+function getPeriodRange(data) {
+  const now = new Date();
+
+  let year = now.getFullYear();
+  let month = now.getMonth();
+
+  if (data.period === "previous_month") {
+    month -= 1;
+  }
+
+  if (data.period === "next_month") {
+    month += 1;
+  }
+
+  if (data.period === "specific_month" && data.month) {
+    month = Number(data.month) - 1;
+    year = Number(data.year || year);
+  }
+
+  const start = new Date(year, month, 1);
+  const end = new Date(year, month + 1, 1);
+
+  return { start, end };
+}
+
+function isDateInRange(dateValue, range) {
+  if (!dateValue) return false;
+
+  const date = new Date(dateValue);
+
+  return date >= range.start && date < range.end;
+}
+
 async function handleFinanceQuery(linkedUser, data) {
   const [incomesRaw, expensesRaw, debtsRaw, investmentsRaw, goalsRaw, subscriptionsRaw] =
     await Promise.all([
@@ -440,18 +473,18 @@ async function handleFinanceQuery(linkedUser, data) {
   const goals = goalsRaw.filter((item) => isSameUser(item, linkedUser));
   const subscriptions = subscriptionsRaw.filter((item) => isSameUser(item, linkedUser));
 
-  const incomesMonth = incomes.filter((item) => isCurrentMonth(getDateValue(item)));
-  const expensesMonth = expenses.filter((item) => isCurrentMonth(getDateValue(item)));
+  const periodRange = getPeriodRange(data);
+
+  const incomesMonth = incomes.filter((item) => isDateInRange(getDateValue(item), periodRange));
+  const expensesMonth = expenses.filter((item) => isDateInRange(getDateValue(item), periodRange));
 
   const totalIncomeMonth = incomesMonth.reduce((sum, item) => sum + getAmount(item), 0);
   const totalExpenseMonth = expensesMonth.reduce((sum, item) => sum + getAmount(item), 0);
-  const debtsMonth = debts.filter((item) => isCurrentMonth(getDateValue(item)));
+  const debtsMonth = debts.filter((item) =>
+    isDateInRange(getDateValue(item), periodRange)
+  );
 
-  const now = new Date();
-const currentMonth = now.getMonth();
-const currentYear = now.getFullYear();
-
-const activeDebts = debts.filter((item) => {
+  const activeDebts = debts.filter((item) => {
   const status = String(item.status || "").toLowerCase();
 
   if (status === "paid" || status === "quitada" || status === "cancelled") {
@@ -459,19 +492,15 @@ const activeDebts = debts.filter((item) => {
   }
 
   const firstDueDate = item.first_due_date ? new Date(item.first_due_date) : null;
-  const currentInstallment = Number(item.current_installment || 1);
-
   if (!firstDueDate) return false;
+
+  const currentInstallment = Number(item.current_installment || 1);
 
   const installmentDate = new Date(firstDueDate);
   installmentDate.setMonth(firstDueDate.getMonth() + currentInstallment - 1);
 
-  return (
-    installmentDate.getMonth() === currentMonth &&
-    installmentDate.getFullYear() === currentYear
-  );
+  return isDateInRange(installmentDate, periodRange);
 });
-
 const debtInstallmentsMonth = activeDebts.map((item) => {
   const totalAmount = Number(item.total_amount || 0);
   const installmentsCount = Number(item.installments_count || 0);
@@ -509,8 +538,8 @@ const debtInstallmentsMonth = activeDebts.map((item) => {
   };
 });
 
-const totalDebtMonth = activeDebts.reduce((sum, item) => {
-  return sum + Number(item.installment_amount || 0);
+const totalDebtMonth = debtInstallmentsMonth.reduce((sum, item) => {
+  return sum + Number(item.used_installment_amount || 0);
 }, 0);
   
   const totalDebtOpen = debts.reduce(
@@ -681,6 +710,10 @@ Regras:
 - Confirmação: action = "confirm".
 - Cancelamento: action = "cancel".
 - Se não entender: action = "unknown".
+- Se o usuário disser "mês passado", use period = "previous_month".
+- Se disser "mês que vem" ou "próximo mês", use period = "next_month".
+- Se disser um mês específico, como "março", "julho de 2026", use period = "specific_month", month = número do mês, year = ano se informado.
+- Se o ano não for informado, use o ano atual.
 
 Categorias:
 Alimentação, Mercado, Lazer, Saúde, Transporte, Combustível, Moradia, Salário, Renda Extra, Assinaturas, Investimentos, Dívidas, Outros.
@@ -730,7 +763,9 @@ Consulta:
 {
   "action": "query",
   "query_type": "balance | expenses_month | income_month | due_bills | summary | debts | investments | goals | unknown",
-  "period": "today | current_month | next_month | current_week | null",
+  "period": "today | current_month | previous_month | next_month | current_week | specific_month | null",
+  "month": number | null,
+  "year": number | null
   "message": "resposta curta",
   "confidence": number
 }
