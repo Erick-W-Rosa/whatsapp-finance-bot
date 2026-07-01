@@ -329,22 +329,23 @@ switch (status.toLowerCase()) {
 }
   
   const payload = {
-    user_id: userId,
-    user: userId,
-    source: "whatsapp",
-    description: action.description || action.category || "Lançamento WhatsApp",
-    category: action.category || "Outros",
-    amount: Number(action.amount),
-    date: toIsoDate(action.date),
-    due_date: toIsoDate(action.date),
-    status,
-    payment_method: action.payment_method || null,
-    account: action.account || null,
-    card: action.card || null,
-    installments: action.installments || null,
-    notes: action.notes || "",
-    created_at: new Date().toISOString()
-  };
+  user_id: userId,
+  user: userId,
+  source: "whatsapp",
+  description: action.description || action.category || "Lançamento WhatsApp",
+  category: action.category || "Outros",
+  amount: Number(action.amount),
+  date: toIsoDate(action.date),
+  due_date: toIsoDate(action.date),
+  receive_date: toIsoDate(action.date),
+  status,
+  payment_method: action.payment_method || null,
+  account: action.account || null,
+  card: action.card || null,
+  installments: action.installments || null,
+  notes: action.notes || "",
+  created_at: new Date().toISOString()
+};
 
   if (entityName === "Expense") {
     return await createEntity("Expense", {
