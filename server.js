@@ -224,15 +224,17 @@ async function linkWhatsAppCode(code, whatsappNumber) {
     });
   }
 
-  const updated = await updateEntity(ENTITY_WHATSAPP_LINKS, link.id, {
-    whatsapp_number: cleanNumber,
-    phone: cleanNumber,
-    telefone: cleanNumber,
-    status: "linked",
-    active: true,
-    linked_at: new Date().toISOString()
-  });
+  const linkUserId = getUserIdFromLink(link);
 
+const updated = await updateEntity(ENTITY_WHATSAPP_LINKS, link.id, {
+  user_id: linkUserId,
+  whatsapp_number: cleanNumber,
+  phone: cleanNumber,
+  telefone: cleanNumber,
+  status: "linked",
+  active: true,
+  linked_at: new Date().toISOString()
+});
   return {
     ...updated,
     user_id: getUserIdFromLink(updated) || getUserIdFromLink(link)
