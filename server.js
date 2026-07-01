@@ -22,13 +22,24 @@ app.get("/webhook/whatsapp", (req, res) => {
 });
 
 app.post("/webhook/whatsapp", async (req, res) => {
-  console.log("Webhook recebido:", JSON.stringify(req.body, null, 2));
+  console.log("Webhook recebido:");
+  console.log(JSON.stringify(req.body, null, 2));
+
   try {
     const message = req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
 
-    if (message?.type === "text") {
+    if (!message) {
+      console.log("Nenhuma mensagem no payload.");
+      return res.sendStatus(200);
+    }
+
+    console.log("Mensagem:", message);
+
+    if (message.type === "text") {
       const from = message.from;
       const text = message.text.body;
+
+      console.log(`Recebido de ${from}: ${text}`);
 
       await axios.post(
         `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`,
@@ -47,11 +58,13 @@ app.post("/webhook/whatsapp", async (req, res) => {
           }
         }
       );
+
+      console.log("Resposta enviada com sucesso.");
     }
 
     res.sendStatus(200);
   } catch (error) {
-    console.error(error.response?.data || error.message);
+    console.error("Erro no webhook:", error.response?.data || error.message);
     res.sendStatus(200);
   }
 });
