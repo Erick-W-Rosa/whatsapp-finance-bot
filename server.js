@@ -780,6 +780,9 @@ app.get("/webhook/whatsapp", (req, res) => {
 
 app.post("/webhook/whatsapp", async (req, res) => {
   try {
+    console.log("WEBHOOK POST RECEBIDO:");
+    console.log(JSON.stringify(req.body, null, 2));  
+    
     const value = req.body?.entry?.[0]?.changes?.[0]?.value;
     const message = value?.messages?.[0];
 
