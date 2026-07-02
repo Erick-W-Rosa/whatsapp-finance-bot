@@ -227,7 +227,10 @@ function verifySignedLinkCode(text) {
 async function linkWhatsAppCode(code, whatsappNumber) {
 
   if (isSignedLinkCode(code)) {
+    
   const payload = verifySignedLinkCode(code);
+  console.log("PAYLOAD DO CÓDIGO ASSINADO:");
+  console.log(JSON.stringify(payload, null, 2));  
   const cleanNumber = normalizePhone(whatsappNumber);
 
   const records = await listEntity(ENTITY_WHATSAPP_LINKS);
