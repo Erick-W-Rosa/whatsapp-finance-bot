@@ -175,6 +175,19 @@ async function linkWhatsAppCode(code, whatsappNumber) {
 
   const records = await listEntity(ENTITY_WHATSAPP_LINKS);
 
+  console.log("====================================");
+  console.log("Código recebido:", cleanCode);
+  console.log("Quantidade de registros:", records.length);
+  console.log(
+    "Códigos existentes:",
+    records.map(r => ({
+      code: r.code,
+      user_id: r.user_id,
+      status: r.status
+    }))
+  );
+  console.log("====================================");
+
   console.log("Registros WhatsAppUserLink:");
   console.log(JSON.stringify(records, null, 2));
 
@@ -186,6 +199,9 @@ async function linkWhatsAppCode(code, whatsappNumber) {
       (status === "pending" || status === "pendente")
     );
   });
+
+  console.log("Registro encontrado:");
+  console.log(JSON.stringify(link, null, 2));
 
   if (!link) {
     throw new Error("Código inválido, expirado ou já utilizado.");
@@ -225,6 +241,14 @@ async function linkWhatsAppCode(code, whatsappNumber) {
   }
 
   const linkUserId = getUserIdFromLink(link);
+
+  console.log("Atualizando vínculo...");
+console.log({
+  id: link.id,
+  code: link.code,
+  user_id: getUserIdFromLink(link),
+  whatsapp: cleanNumber
+});
 
 const updated = await updateEntity(ENTITY_WHATSAPP_LINKS, link.id, {
   user_id: linkUserId,
