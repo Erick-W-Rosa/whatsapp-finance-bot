@@ -88,6 +88,10 @@ async function listEntity(entityName) {
   return [];
 }
 
+async function createEntity(entityName, data) {
+  return await base44Request("POST", `/entities/${entityName}`, data);
+}
+
 async function updateEntity(entityName, id, data) {
   return await base44Request("PUT", `/entities/${entityName}/${id}`, data);
 }
