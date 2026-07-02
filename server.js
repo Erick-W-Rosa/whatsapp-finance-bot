@@ -113,8 +113,11 @@ function cleanJson(text) {
 
 function getUserIdFromLink(link) {
   return (
+    link.user_email ||
     link.user_id ||
+    link.email ||
     link.userId ||
+    link.user?.email ||
     link.user?.id ||
     link.user ||
     link.created_by ||
@@ -1030,6 +1033,9 @@ app.post("/webhook/whatsapp", async (req, res) => {
     console.log(`Mensagem de ${from}: ${text}`);
 
     const linkedUser = await findUserByWhatsAppNumber(from);
+
+    console.log("USUÁRIO ENCONTRADO:");
+    console.log(JSON.stringify(linkedUser, null, 2));
     const isLinked = !!linkedUser?.user_id;
 
     if (isLinkCode(text) || isSignedLinkCode(text)) {
