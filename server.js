@@ -7,6 +7,9 @@ const { GoogleGenAI } = require("@google/genai");
 const app = express();
 app.use(express.json());
 
+const crypto = require("crypto");
+const WHATSAPP_LINK_SECRET = process.env.WHATSAPP_LINK_SECRET || "chave_secreta_zap";
+
 const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
 const ACCESS_TOKEN = process.env.META_ACCESS_TOKEN;
 const PHONE_NUMBER_ID = process.env.META_PHONE_NUMBER_ID;
@@ -169,7 +172,106 @@ async function findUserByWhatsAppNumber(whatsappNumber) {
   }
 }
 
+function base64urlDecode(value) {
+  value = value.replace(/-/g, "+").replace(/_/g, "/");
+  while (value.length % 4) value += "=";
+  return Buffer.from(value, "base64").toString("utf8");
+}
+
+function base64urlEncode(buffer) {
+  return Buffer.from(buffer)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=/g, "");
+}
+
+function isSignedLinkCode(text) {
+  return /^SM-[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(String(text || "").trim());
+}
+
+function verifySignedLinkCode(text) {
+  const clean = String(text || "").trim();
+
+  if (!isSignedLinkCode(clean)) {
+    throw new Error("Código assinado inválido.");
+  }
+
+  const token = clean.replace(/^SM-/i, "");
+  const [payloadB64, signatureB64] = token.split(".");
+
+  const expectedSignature = base64urlEncode(
+    crypto
+      .createHmac("sha256", WHATSAPP_LINK_SECRET)
+      .update(payloadB64)
+      .digest()
+  );
+
+  if (signatureB64 !== expectedSignature) {
+    throw new Error("Assinatura inválida.");
+  }
+
+  const payload = JSON.parse(base64urlDecode(payloadB64));
+
+  if (payload.exp && Date.now() > Number(payload.exp)) {
+    throw new Error("Código expirado.");
+  }
+
+  if (!payload.user_id && !payload.email) {
+    throw new Error("Código sem usuário.");
+  }
+
+  return payload;
+}
+
 async function linkWhatsAppCode(code, whatsappNumber) {
+
+  if (isSignedLinkCode(code)) {
+  const payload = verifySignedLinkCode(code);
+  const cleanNumber = normalizePhone(whatsappNumber);
+
+  const records = await listEntity(ENTITY_WHATSAPP_LINKS);
+
+  const alreadyLinked = records.filter((item) => {
+    const itemNumber = normalizePhone(
+      item.whatsapp_number ||
+      item.phone ||
+      item.telefone ||
+      item.number ||
+      ""
+    );
+
+    return itemNumber === cleanNumber && item.active === true;
+  });
+
+  for (const item of alreadyLinked) {
+    await updateEntity(ENTITY_WHATSAPP_LINKS, item.id, {
+      status: "cancelled",
+      active: false
+    });
+  }
+
+  const created = await createEntity(ENTITY_WHATSAPP_LINKS, {
+    code,
+    user_id: payload.user_id || payload.email,
+    user_email: payload.email || null,
+    user_name: payload.name || null,
+    whatsapp_number: cleanNumber,
+    phone: cleanNumber,
+    telefone: cleanNumber,
+    status: "linked",
+    active: true,
+    linked_at: new Date().toISOString(),
+    expires_at: new Date(payload.exp || Date.now()).toISOString()
+  });
+
+  return {
+    ...created,
+    user_id: payload.user_id || payload.email,
+    user_email: payload.email || null
+  };
+}
+  
   const cleanCode = code.toUpperCase();
   const cleanNumber = normalizePhone(whatsappNumber);
 
@@ -929,7 +1031,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
     const linkedUser = await findUserByWhatsAppNumber(from);
     const isLinked = !!linkedUser?.user_id;
 
-    if (isLinkCode(text)) {
+    if (isLinkCode(text) || isSignedLinkCode(text)) {
       try {
         const result = await linkWhatsAppCode(text, from);
 
