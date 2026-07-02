@@ -88,9 +88,20 @@ async function listEntity(entityName) {
   return [];
 }
 
-async function createEntity(entityName, data) {
-  return await base44Request("POST", `/entities/${entityName}`, data);
-}
+const created = await createEntity(ENTITY_WHATSAPP_LINKS, {
+  code,
+  user_id: payload.email || payload.user_id,
+  base44_user_id: payload.user_id || null,
+  user_email: payload.email || null,
+  user_name: payload.name || null,
+  whatsapp_number: cleanNumber,
+  phone: cleanNumber,
+  telefone: cleanNumber,
+  status: "linked",
+  active: true,
+  linked_at: new Date().toISOString(),
+  expires_at: new Date(payload.exp || Date.now()).toISOString()
+});
 
 async function updateEntity(entityName, id, data) {
   return await base44Request("PUT", `/entities/${entityName}/${id}`, data);
@@ -256,8 +267,9 @@ async function linkWhatsAppCode(code, whatsappNumber) {
 
   const created = await createEntity(ENTITY_WHATSAPP_LINKS, {
     code,
-    user_id: payload.user_id || payload.email,
+    user_id: payload.email || payload.user_id,
     user_email: payload.email || null,
+    base44_user_id: payload.user_id || null,
     user_name: payload.name || null,
     whatsapp_number: cleanNumber,
     phone: cleanNumber,
